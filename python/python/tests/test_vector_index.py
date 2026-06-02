@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright The Lance Authors
 
+import json
 import logging
 import os
 import platform
@@ -21,10 +22,41 @@ import pytest
 from conftest import ProgressRecorder, progress_event_tags, stage_progress_values
 from lance import LanceDataset, LanceFragment
 from lance.dataset import VectorIndexReader
+from lance.file import LanceFileReader
 from lance.indices import IndexFileVersion, IndicesBuilder
 from lance.query import MatchQuery, PhraseQuery
 from lance.util import validate_vector_index  # noqa: E402
 from lance.vector import vec_to_table  # noqa: E402
+
+
+def read_sq_bounds_from_segment(ds, segment):
+    aux_path = Path(ds.uri) / "_indices" / segment.uuid / "auxiliary.idx"
+    metadata = LanceFileReader(str(aux_path)).metadata().schema.metadata
+    sq_metadata = metadata.get(b"lance:sq")
+    if sq_metadata is None:
+        storage_entries = json.loads(metadata[b"storage_metadata"])
+        sq_metadata = storage_entries[0]
+    else:
+        sq_metadata = sq_metadata.decode()
+    bounds = json.loads(sq_metadata)["bounds"]
+    return bounds["start"], bounds["end"]
+
+
+def make_two_fragment_sq_dataset(tmp_path, name):
+    dim = 8
+    rows_per_fragment = 32
+    first = np.tile(np.arange(dim, dtype=np.float32), (rows_per_fragment, 1))
+    second = first + 1000.0
+    vectors = np.concatenate([first, second], axis=0).reshape(-1)
+    table = pa.Table.from_arrays(
+        [pa.FixedSizeListArray.from_arrays(vectors, dim)], names=["vector"]
+    )
+    ds = lance.write_dataset(
+        table,
+        tmp_path / name,
+        max_rows_per_file=rows_per_fragment,
+    )
+    return ds, dim
 
 
 def create_table(nvec=1000, ndim=128, nans=0, nullify=False, dtype=np.float32):
@@ -2998,6 +3030,68 @@ def test_merge_two_shards_parameterized(tmp_path, index_type, num_sub_vectors):
     q = np.random.rand(128).astype(np.float32)
     results = ds.to_table(nearest={"column": "vector", "q": q, "k": 5})
     assert 0 < len(results) <= 5
+
+
+def test_create_index_uncommitted_with_sq_bounds(tmp_path):
+    ds, dim = make_two_fragment_sq_dataset(tmp_path, "sq_bounds_injection")
+    fragments = ds.get_fragments()
+    ivf = IndicesBuilder(ds, "vector").train_ivf(
+        num_partitions=1,
+        sample_rate=2,
+    )
+
+    segment = ds.create_index_uncommitted(
+        "vector",
+        index_type="IVF_SQ",
+        num_partitions=1,
+        ivf_centroids=ivf.centroids,
+        fragment_ids=[fragments[0].fragment_id],
+        sq_bounds=(0.0, 1000.0 + float(dim - 1)),
+    )
+
+    assert read_sq_bounds_from_segment(ds, segment) == (0.0, 1000.0 + float(dim - 1))
+
+
+def test_create_index_uncommitted_with_sq_model(tmp_path):
+    ds, dim = make_two_fragment_sq_dataset(tmp_path, "sq_model_injection")
+    fragments = ds.get_fragments()
+    builder = IndicesBuilder(ds, "vector")
+    ivf = builder.train_ivf(
+        num_partitions=1,
+        sample_rate=2,
+    )
+    sq = builder.train_sq_bounds(sample_rate=2)
+
+    segment = ds.create_index_uncommitted(
+        "vector",
+        index_type="IVF_SQ",
+        num_partitions=1,
+        ivf_centroids=ivf.centroids,
+        fragment_ids=[fragments[0].fragment_id],
+        sq_bounds=sq,
+    )
+
+    assert sq.bounds == (0.0, 1000.0 + float(dim - 1))
+    assert read_sq_bounds_from_segment(ds, segment) == sq.bounds
+
+
+def test_create_index_uncommitted_rejects_invalid_sq_bounds(tmp_path):
+    ds, _ = make_two_fragment_sq_dataset(tmp_path, "sq_bounds_invalid")
+    fragments = ds.get_fragments()
+    ivf = IndicesBuilder(ds, "vector").train_ivf(
+        num_partitions=1,
+        sample_rate=2,
+    )
+
+    with pytest.raises(ValueError, match="sq_bounds min"):
+        ds.create_index_uncommitted(
+            "vector",
+            index_type="IVF_SQ",
+            num_partitions=1,
+            ivf_centroids=ivf.centroids,
+            fragment_ids=[fragments[0].fragment_id],
+            sq_bounds=(1.0, 0.0),
+        )
 
 
 def test_commit_existing_index_segments_accepts_index_metadata(tmp_path):

@@ -4,7 +4,7 @@
 from enum import Enum
 
 from .. import lance as _lance
-from .builder import IndexConfig, IndicesBuilder
+from .builder import IndexConfig, IndicesBuilder, SqModel
 from .ivf import IvfModel
 from .pq import PqModel
 
@@ -16,6 +16,7 @@ __all__ = [
     "IndicesBuilder",
     "IndexConfig",
     "PqModel",
+    "SqModel",
     "IvfModel",
     "IndexFileVersion",
     "IndexSegment",

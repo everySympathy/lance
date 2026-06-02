@@ -4439,6 +4439,31 @@ fn prepare_vector_index_params(
             pq_params.codebook = Some(codebook.values().clone())
         };
 
+        if let Some(bounds) = kwargs.get_item("sq_bounds")? {
+            let bounds: Vec<f64> = bounds.extract().map_err(|_| {
+                PyValueError::new_err("sq_bounds must be a sequence of two numbers: (min, max)")
+            })?;
+            if bounds.len() != 2 {
+                return Err(PyValueError::new_err(format!(
+                    "sq_bounds must contain exactly two values, got {}",
+                    bounds.len()
+                )));
+            }
+            if !bounds[0].is_finite() || !bounds[1].is_finite() {
+                return Err(PyValueError::new_err(format!(
+                    "sq_bounds values must be finite, got ({}, {})",
+                    bounds[0], bounds[1]
+                )));
+            }
+            if bounds[0] > bounds[1] {
+                return Err(PyValueError::new_err(format!(
+                    "sq_bounds min must be less than or equal to max, got ({}, {})",
+                    bounds[0], bounds[1]
+                )));
+            }
+            sq_params.bounds = Some(bounds[0]..bounds[1]);
+        };
+
         if let Some(version) = kwargs.get_item("index_file_version")? {
             let version: String = version.extract()?;
             index_file_version = IndexFileVersion::try_from(&version)

@@ -57,6 +57,15 @@ def train_pq_model(
     ivf_model: pa.Array,
     fragment_ids: Optional[list[int]] = None,
 ) -> pa.Array: ...
+def train_sq_model(
+    dataset,
+    column: str,
+    dimension: int,
+    distance_type: str,
+    sample_rate: int,
+    num_bits: int,
+    fragment_ids: Optional[list[int]] = None,
+) -> tuple[float, float]: ...
 def transform_vectors(
     dataset,
     column: str,

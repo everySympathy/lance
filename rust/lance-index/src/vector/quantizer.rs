@@ -45,6 +45,9 @@ pub trait Quantization:
         distance_type: DistanceType,
         params: &Self::BuildParams,
     ) -> Result<Self>;
+    fn build_without_data(_dimension: usize, _params: &Self::BuildParams) -> Result<Option<Self>> {
+        Ok(None)
+    }
     fn retrain(&mut self, data: &dyn Array) -> Result<()>;
     fn code_dim(&self) -> usize;
     fn column(&self) -> &'static str;

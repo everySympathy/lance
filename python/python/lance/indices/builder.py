@@ -4,7 +4,7 @@
 import math
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Optional, Union
+from typing import TYPE_CHECKING, Optional, Tuple, Union
 
 import numpy as np
 import pyarrow as pa
@@ -475,6 +475,57 @@ class IndicesBuilder:
         else:
             raise ValueError("filenames must be a list of strings")
 
+    def train_sq_bounds(
+        self,
+        *,
+        distance_type: str = "l2",
+        sample_rate: int = 256,
+        num_bits: int = 8,
+        fragment_ids: Optional[list[int]] = None,
+    ) -> "SqModel":
+        """
+        Train scalar quantization bounds for the given vector column.
+
+        This computes the min/max range used by SQ to map float vectors into
+        integer codes. If fragment_ids is provided, bounds are computed only from
+        those fragments.
+
+        Parameters
+        ----------
+        distance_type: "l2" | "dot" | "cosine"
+            The distance type to use. For cosine, vectors are normalized before
+            bounds are computed, matching SQ index training.
+        sample_rate: int
+            SQ is trained on a random sample of the dataset. The sample size is
+            sample_rate * 2 ** num_bits.
+        num_bits: int
+            The number of bits used for scalar quantization. Currently 8 bits is
+            the standard SQ encoding.
+        fragment_ids: list[int], optional
+            If provided, train using only the specified fragments from the dataset.
+        """
+        from lance.lance import indices
+
+        self._verify_base_sample_rate(sample_rate)
+        if not isinstance(num_bits, int):
+            raise TypeError(f"num_bits must be int, got {type(num_bits)}")
+        if num_bits != 8:
+            raise ValueError("SQ bounds training currently supports num_bits=8")
+        distance_type = self._normalize_distance_type(distance_type)
+        if distance_type == "hamming":
+            raise ValueError("SQ bounds training does not support hamming distance")
+
+        bounds = indices.train_sq_model(
+            self.dataset._ds,
+            self.column[0],
+            self.dimension,
+            distance_type,
+            sample_rate,
+            num_bits,
+            fragment_ids,
+        )
+        return SqModel(bounds, num_bits, self.dimension)
+
     def _determine_num_partitions(self, num_partitions: Optional[int], num_rows: int):
         if num_partitions is None:
             return round(math.sqrt(num_rows))
@@ -618,6 +669,20 @@ class IndicesBuilder:
         if isinstance(data_type, pa.FixedShapeTensorType) and len(data_type.shape) == 1:
             return data_type.shape[0], data_type.value_type
         return None
+
+
+@dataclass
+class SqModel:
+    """A class that represents scalar quantization training metadata."""
+
+    bounds: Tuple[float, float]
+    """The global min/max bounds used for SQ encoding."""
+
+    num_bits: int
+    """The number of bits used for scalar quantization."""
+
+    dimension: int
+    """The dimension of the vectors this model was trained on."""
 
 
 @dataclass

@@ -442,6 +442,18 @@ impl<S: IvfSubIndex + 'static, Q: Quantization + 'static> IvfIndexBuilder<S, Q> 
                 "dataset not set before loading or building quantizer",
             ));
         };
+        if let Some(quantizer_params) = self.quantizer_params.as_ref() {
+            let vector_field = dataset.schema().field(&self.column).ok_or_else(|| {
+                Error::index(format!(
+                    "quantizer builder: column {} does not exist in schema",
+                    self.column
+                ))
+            })?;
+            let dimension = infer_vector_dim(&vector_field.data_type())?;
+            if let Some(quantizer) = Q::build_without_data(dimension, quantizer_params)? {
+                return Ok(quantizer);
+            }
+        }
         let sample_size_hint = match &self.quantizer_params {
             Some(params) => params.sample_size(),
             None => 256 * 256, // here it must be retrain, let's just set sample size to the default value

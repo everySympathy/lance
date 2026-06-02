@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: Copyright The Lance Authors
 
+use std::ops::Range;
+
 use crate::vector::quantizer::QuantizerBuildParams;
 
 #[derive(Debug, Clone)]
@@ -10,6 +12,9 @@ pub struct SQBuildParams {
 
     /// Sample rate for training.
     pub sample_rate: usize,
+
+    /// User provided scalar quantization bounds.
+    pub bounds: Option<Range<f64>>,
 }
 
 impl From<&SQBuildParams> for crate::pb::vector_index_details::ScalarQuantization {
@@ -25,6 +30,7 @@ impl Default for SQBuildParams {
         Self {
             num_bits: 8,
             sample_rate: 256,
+            bounds: None,
         }
     }
 }

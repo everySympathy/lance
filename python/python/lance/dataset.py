@@ -3287,6 +3287,7 @@ class LanceDataset(pa.dataset.Dataset):
         pq_codebook: Optional[
             Union[np.ndarray, pa.FixedSizeListArray, pa.FixedShapeTensorArray]
         ] = None,
+        sq_bounds: Optional[Union[Tuple[float, float], Any]] = None,
         num_sub_vectors: Optional[int] = None,
         accelerator: Optional[Union[str, "torch.Device"]] = None,
         index_cache_size: Optional[int] = None,
@@ -3618,6 +3619,17 @@ class LanceDataset(pa.dataset.Dataset):
                 )
                 kwargs["pq_codebook"] = pq_codebook_batch
 
+        if sq_bounds is not None:
+            if hasattr(sq_bounds, "bounds"):
+                sq_bounds = sq_bounds.bounds
+            if not isinstance(sq_bounds, Sequence) or isinstance(sq_bounds, str):
+                raise TypeError("sq_bounds must be a sequence of two numbers")
+            if len(sq_bounds) != 2:
+                raise ValueError(
+                    f"sq_bounds must contain exactly two values, got {len(sq_bounds)}"
+                )
+            kwargs["sq_bounds"] = (float(sq_bounds[0]), float(sq_bounds[1]))
+
         if shuffle_partition_batches is not None:
             kwargs["shuffle_partition_batches"] = shuffle_partition_batches
         if shuffle_partition_concurrency is not None:
@@ -3666,6 +3678,7 @@ class LanceDataset(pa.dataset.Dataset):
         pq_codebook: Optional[
             Union[np.ndarray, pa.FixedSizeListArray, pa.FixedShapeTensorArray]
         ] = None,
+        sq_bounds: Optional[Union[Tuple[float, float], Any]] = None,
         num_sub_vectors: Optional[int] = None,
         accelerator: Optional[Union[str, "torch.Device"]] = None,
         index_cache_size: Optional[int] = None,
@@ -3894,6 +3907,7 @@ class LanceDataset(pa.dataset.Dataset):
             num_partitions=num_partitions,
             ivf_centroids=ivf_centroids,
             pq_codebook=pq_codebook,
+            sq_bounds=sq_bounds,
             num_sub_vectors=num_sub_vectors,
             accelerator=accelerator,
             index_cache_size=index_cache_size,
@@ -3930,6 +3944,7 @@ class LanceDataset(pa.dataset.Dataset):
         pq_codebook: Optional[
             Union[np.ndarray, pa.FixedSizeListArray, pa.FixedShapeTensorArray]
         ] = None,
+        sq_bounds: Optional[Union[Tuple[float, float], Any]] = None,
         num_sub_vectors: Optional[int] = None,
         accelerator: Optional[Union[str, "torch.Device"]] = None,
         index_cache_size: Optional[int] = None,
@@ -3989,6 +4004,7 @@ class LanceDataset(pa.dataset.Dataset):
             num_partitions=num_partitions,
             ivf_centroids=ivf_centroids,
             pq_codebook=pq_codebook,
+            sq_bounds=sq_bounds,
             num_sub_vectors=num_sub_vectors,
             accelerator=accelerator,
             index_cache_size=index_cache_size,

@@ -3,6 +3,7 @@
 import math
 import os
 import pathlib
+from dataclasses import asdict
 
 import lance
 import numpy as np
@@ -342,6 +343,45 @@ def test_pq_fragment_ids(rand_dataset):
 
     assert pq.dimension == DIMENSION
     assert pq.num_subvectors == NUM_SUBVECTORS
+
+
+def test_sq_bounds_fragment_ids(tmpdir):
+    dim = 8
+    rows_per_fragment = 32
+    first = np.tile(np.arange(dim, dtype=np.float32), (rows_per_fragment, 1))
+    second = first + 1000.0
+    vectors = np.concatenate([first, second], axis=0).reshape(-1)
+    table = pa.Table.from_arrays(
+        [pa.FixedSizeListArray.from_arrays(vectors, dim)], names=["vectors"]
+    )
+    ds = lance.write_dataset(
+        table,
+        pathlib.Path(tmpdir) / "fragment_sq",
+        max_rows_per_file=rows_per_fragment,
+    )
+    fragment_ids = [fragment.fragment_id for fragment in ds.get_fragments()]
+
+    first_sq = IndicesBuilder(ds, "vectors").train_sq_bounds(
+        fragment_ids=[fragment_ids[0]]
+    )
+    second_sq = IndicesBuilder(ds, "vectors").train_sq_bounds(
+        fragment_ids=[fragment_ids[1]]
+    )
+
+    assert first_sq.dimension == dim
+    assert first_sq.num_bits == 8
+    assert first_sq.bounds == (0.0, float(dim - 1))
+    assert second_sq.bounds == (1000.0, 1000.0 + float(dim - 1))
+    assert asdict(first_sq) == {
+        "bounds": (0.0, float(dim - 1)),
+        "num_bits": 8,
+        "dimension": dim,
+    }
+
+    with pytest.raises(ValueError, match="num_bits=8"):
+        IndicesBuilder(ds, "vectors").train_sq_bounds(num_bits=4)
+    with pytest.raises(ValueError, match="does not support hamming"):
+        IndicesBuilder(ds, "vectors").train_sq_bounds(distance_type="hamming")
 
 
 def test_pq_invalid_sub_vectors(tmpdir, rand_dataset, rand_ivf):

@@ -59,6 +59,22 @@ impl ScalarQuantizer {
         sq
     }
 
+    fn validate_bounds(bounds: &Range<f64>) -> Result<()> {
+        if !bounds.start.is_finite() || !bounds.end.is_finite() {
+            return Err(Error::invalid_input(format!(
+                "SQ bounds values must be finite, got ({}, {})",
+                bounds.start, bounds.end
+            )));
+        }
+        if bounds.start > bounds.end {
+            return Err(Error::invalid_input(format!(
+                "SQ bounds start must be less than or equal to end, got ({}, {})",
+                bounds.start, bounds.end
+            )));
+        }
+        Ok(())
+    }
+
     pub fn num_bits(&self) -> u16 {
         self.metadata.num_bits
     }
@@ -142,6 +158,15 @@ impl Quantization for ScalarQuantizer {
             data.data_type()
         )))?;
 
+        if let Some(bounds) = &params.bounds {
+            Self::validate_bounds(bounds)?;
+            return Ok(Self::with_bounds(
+                params.num_bits,
+                fsl.value_length() as usize,
+                bounds.clone(),
+            ));
+        }
+
         let mut quantizer = Self::new(params.num_bits, fsl.value_length() as usize);
 
         match fsl.value_type() {
@@ -163,6 +188,19 @@ impl Quantization for ScalarQuantizer {
         }
 
         Ok(quantizer)
+    }
+
+    fn build_without_data(dimension: usize, params: &Self::BuildParams) -> Result<Option<Self>> {
+        if let Some(bounds) = &params.bounds {
+            Self::validate_bounds(bounds)?;
+            Ok(Some(Self::with_bounds(
+                params.num_bits,
+                dimension,
+                bounds.clone(),
+            )))
+        } else {
+            Ok(None)
+        }
     }
 
     fn retrain(&mut self, data: &dyn Array) -> Result<()> {
@@ -321,6 +359,55 @@ mod tests {
         sq_values.values().iter().enumerate().for_each(|(i, v)| {
             assert_eq!(*v, (i * 17) as u8,);
         });
+    }
+
+    #[tokio::test]
+    async fn test_build_with_injected_bounds() {
+        let float_values = Vec::from_iter((0..16).map(|v| v as f32));
+        let float_array = Float32Array::from_iter_values(float_values);
+        let vectors = FixedSizeListArray::try_new_from_values(float_array, 4).unwrap();
+        let params = SQBuildParams {
+            bounds: Some(-10.0..10.0),
+            ..Default::default()
+        };
+
+        let sq = ScalarQuantizer::build(&vectors, DistanceType::L2, &params).unwrap();
+
+        assert_eq!(sq.bounds(), -10.0..10.0);
+        assert_eq!(sq.num_bits(), 8);
+        assert_eq!(sq.code_dim(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_build_without_data_with_injected_bounds() {
+        let params = SQBuildParams {
+            bounds: Some(-10.0..10.0),
+            ..Default::default()
+        };
+
+        let sq = ScalarQuantizer::build_without_data(4, &params)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(sq.bounds(), -10.0..10.0);
+        assert_eq!(sq.num_bits(), 8);
+        assert_eq!(sq.code_dim(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_build_rejects_invalid_injected_bounds() {
+        let float_values = Vec::from_iter((0..16).map(|v| v as f32));
+        let float_array = Float32Array::from_iter_values(float_values);
+        let vectors = FixedSizeListArray::try_new_from_values(float_array, 4).unwrap();
+
+        for bounds in [f64::NAN..10.0, 10.0..f64::NAN, 10.0..0.0] {
+            let params = SQBuildParams {
+                bounds: Some(bounds),
+                ..Default::default()
+            };
+
+            assert!(ScalarQuantizer::build(&vectors, DistanceType::L2, &params).is_err());
+        }
     }
 
     #[tokio::test]

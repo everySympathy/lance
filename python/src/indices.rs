@@ -13,14 +13,18 @@ use lance::dataset::Dataset as LanceDataset;
 use lance::index::DatasetIndexExt;
 use lance::index::vector::ivf::builder::write_vector_storage;
 use lance::index::vector::pq::build_pq_model_in_fragments;
+use lance::index::vector::utils::{filter_finite_training_data, maybe_sample_training_data};
 use lance::index::{IndexSegment, IndexSegmentPlan};
 use lance::io::ObjectStore;
 use lance_index::progress::NoopIndexBuildProgress;
 use lance_index::vector::ivf::shuffler::{IvfShuffler, shuffle_vectors};
+use lance_index::vector::quantizer::{Quantization, QuantizerBuildParams};
+use lance_index::vector::sq::{ScalarQuantizer, builder::SQBuildParams};
 use lance_index::vector::{
     ivf::{IvfBuildParams, storage::IvfModel},
     pq::{PQBuildParams, ProductQuantizer},
 };
+use lance_linalg::kernels::normalize_fsl_owned;
 use lance_linalg::distance::DistanceType;
 use lance_table::format::{IndexMetadata, list_index_files_with_sizes};
 use pyo3::Bound;
@@ -356,6 +360,77 @@ fn train_pq_model<'py>(
         ),
     )??;
     codebook.to_pyarrow(py)
+}
+
+async fn do_train_sq_model(
+    dataset: &Dataset,
+    column: &str,
+    dimension: usize,
+    distance_type: &str,
+    sample_rate: u32,
+    num_bits: u32,
+    fragment_ids: Option<Vec<u32>>,
+) -> PyResult<(f64, f64)> {
+    let distance_type = DistanceType::try_from(distance_type)
+        .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    let params = SQBuildParams {
+        num_bits: num_bits as u16,
+        sample_rate: sample_rate as usize,
+        ..Default::default()
+    };
+    let mut training_data = maybe_sample_training_data(
+        dataset.ds.as_ref(),
+        column,
+        params.sample_size(),
+        fragment_ids.as_deref(),
+    )
+    .await
+    .infer_error()?;
+    if training_data.value_length() as usize != dimension {
+        return Err(PyValueError::new_err(format!(
+            "Expected column {} to have dimension {}, got {}",
+            column,
+            dimension,
+            training_data.value_length()
+        )));
+    }
+
+    if distance_type == DistanceType::Cosine {
+        training_data = normalize_fsl_owned(training_data)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    }
+
+    let training_data = filter_finite_training_data(training_data).infer_error()?;
+    let quantizer = ScalarQuantizer::build(&training_data, DistanceType::L2, &params)
+        .infer_error()?;
+    let bounds = quantizer.bounds();
+    Ok((bounds.start, bounds.end))
+}
+
+#[pyfunction]
+#[pyo3(signature=(dataset, column, dimension, distance_type, sample_rate, num_bits, fragment_ids=None))]
+fn train_sq_model(
+    py: Python<'_>,
+    dataset: &Dataset,
+    column: &str,
+    dimension: usize,
+    distance_type: &str,
+    sample_rate: u32,
+    num_bits: u32,
+    fragment_ids: Option<Vec<u32>>,
+) -> PyResult<(f64, f64)> {
+    rt().block_on(
+        Some(py),
+        do_train_sq_model(
+            dataset,
+            column,
+            dimension,
+            distance_type,
+            sample_rate,
+            num_bits,
+            fragment_ids,
+        ),
+    )?
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -752,6 +827,7 @@ pub fn register_indices(py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     let indices = PyModule::new(py, "indices")?;
     indices.add_wrapped(wrap_pyfunction!(train_ivf_model))?;
     indices.add_wrapped(wrap_pyfunction!(train_pq_model))?;
+    indices.add_wrapped(wrap_pyfunction!(train_sq_model))?;
     indices.add_wrapped(wrap_pyfunction!(transform_vectors))?;
     indices.add_wrapped(wrap_pyfunction!(shuffle_transformed_vectors))?;
     indices.add_wrapped(wrap_pyfunction!(load_shuffled_vectors))?;
